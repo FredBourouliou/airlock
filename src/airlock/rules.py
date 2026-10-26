@@ -1,0 +1,195 @@
+"""Airlock deterministic inspection engine.
+
+Every tool call an agent wants to make (OUTBOUND) and every piece of content
+that reaches the agent (INBOUND) is passed through a set of deterministic rules.
+Each rule returns a Finding or nothing; the engine keeps the most severe decision.
+
+This layer uses the standard library only. It is the authoritative layer: a BLOCK
+here is final. The optional local-LLM classifier (see classifier.py) can only add
+findings, never override a deterministic BLOCK.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from enum import IntEnum
+from typing import Callable, Optional
+
+
+class Direction(IntEnum):
+    INBOUND = 0   # tool result / external content on its way to the agent
+    OUTBOUND = 1  # a tool call the agent is attempting
+
+
+class Decision(IntEnum):
+    ALLOW = 0
+    FLAG = 1
+    BLOCK = 2
+
+
+@dataclass(frozen=True)
+class Policy:
+    """What the agent is allowed to do, declared up front."""
+    org_domain: str = ""
+    allowlist_recipients: frozenset[str] = frozenset()
+    allowlist_domains: frozenset[str] = frozenset()
+    pii_egress_threshold: int = 5  # distinct records with sensitive fields
+
+    def recipient_is_trusted(self, address: str) -> bool:
+        address = address.strip().lower()
+        if not address:
+            return False
+        if address in {a.lower() for a in self.allowlist_recipients}:
+            return True
+        domain = address.rsplit("@", 1)[-1]
+        if self.org_domain and domain == self.org_domain.lower():
+            return True
+        return domain in {d.lower() for d in self.allowlist_domains}
+
+
+@dataclass
+class Event:
+    direction: Direction
+    tool: str                      # e.g. "read_inbox", "send_message", "read_web"
+    text: str = ""                 # raw textual content (inbound body, or call payload)
+    recipients: list[str] = field(default_factory=list)   # for send-like OUTBOUND calls
+    records: list[dict] = field(default_factory=list)      # structured rows in the payload
+
+
+@dataclass(frozen=True)
+class Finding:
+    rule_id: str
+    decision: Decision
+    reason: str
+
+
+@dataclass
+class Verdict:
+    decision: Decision
+    findings: list[Finding]
+
+    @property
+    def blocked(self) -> bool:
+        return self.decision is Decision.BLOCK
+
+
+# --- sensitive-field detection ------------------------------------------------
+
+_EMAIL_RE = re.compile(r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}", re.I)
+
+# Imperative instruction-override phrasings (classic prompt injection).
+_OVERRIDE_RE = re.compile(
+    r"\b(ignore|disregard|forget)\b.{0,30}\b(previous|above|prior|earlier|all)\b.{0,30}"
+    r"\b(instruction|instructions|rules|prompt|context)\b"
+    r"|\bnew\s+instructions?\s*:"
+    r"|\bsystem\s+(override|prompt)\b"
+    r"|\byou\s+are\s+now\b",
+    re.I | re.S,
+)
+
+# Content that tells the agent to send/forward/export data somewhere.
+_EXFIL_VERB_RE = re.compile(
+    r"\b(send|forward|email|e-mail|export|upload|transmit|cc|bcc|deliver)\b", re.I
+)
+
+# Markers that mimic a system/tool role inside ordinary content.
+_ROLE_SPOOF_RE = re.compile(
+    r"\[\s*(system|assistant|tool|developer)\b[^\]]*\]"
+    r"|<\s*/?\s*(system|assistant|tool)\s*>"
+    r"|^\s*(system|tool)\s*:",
+    re.I | re.M,
+)
+
+_SENSITIVE_FIELDS = ("email", "address", "address1", "postal", "postcode",
+                     "zip", "phone", "card", "ssn", "iban")
+
+
+def _record_is_sensitive(row: dict) -> bool:
+    keys = {k.lower() for k in row}
+    return any(any(s in k for s in _SENSITIVE_FIELDS) for k in keys)
+
+
+# --- rules --------------------------------------------------------------------
+# A rule takes (event, policy) and returns a Finding or None.
+
+Rule = Callable[[Event, Policy], Optional[Finding]]
+
+
+def rule_instruction_override(ev: Event, policy: Policy) -> Optional[Finding]:
+    if ev.direction is Direction.INBOUND and _OVERRIDE_RE.search(ev.text):
+        return Finding(
+            "instruction-override", Decision.BLOCK,
+            "Inbound content tries to override the agent's standing instructions.",
+        )
+    return None
+
+
+def rule_exfil_instruction(ev: Event, policy: Policy) -> Optional[Finding]:
+    """Inbound content that instructs the agent to send data to an outside address."""
+    if ev.direction is not Direction.INBOUND:
+        return None
+    if not _EXFIL_VERB_RE.search(ev.text):
+        return None
+    outside = [a for a in _EMAIL_RE.findall(ev.text) if not policy.recipient_is_trusted(a)]
+    if outside:
+        return Finding(
+            "exfil-instruction", Decision.BLOCK,
+            f"Inbound content asks the agent to send data to an outside address "
+            f"({outside[0]}).",
+        )
+    return None
+
+
+def rule_role_spoof(ev: Event, policy: Policy) -> Optional[Finding]:
+    if ev.direction is Direction.INBOUND and _ROLE_SPOOF_RE.search(ev.text):
+        return Finding(
+            "role-spoof", Decision.FLAG,
+            "Inbound content impersonates a system/tool role.",
+        )
+    return None
+
+
+def rule_external_recipient(ev: Event, policy: Policy) -> Optional[Finding]:
+    """Outbound send/transfer to a recipient outside the policy allowlist."""
+    if ev.direction is not Direction.OUTBOUND:
+        return None
+    if not re.search(r"send|transfer|email|message|forward", ev.tool, re.I):
+        return None
+    outside = [a for a in ev.recipients if not policy.recipient_is_trusted(a)]
+    if outside:
+        return Finding(
+            "external-recipient", Decision.BLOCK,
+            f"Outbound '{ev.tool}' targets an untrusted recipient ({outside[0]}).",
+        )
+    return None
+
+
+def rule_pii_volume(ev: Event, policy: Policy) -> Optional[Finding]:
+    """Outbound payload carrying sensitive records above the egress threshold."""
+    if ev.direction is not Direction.OUTBOUND:
+        return None
+    sensitive = [r for r in ev.records if _record_is_sensitive(r)]
+    if len(sensitive) >= policy.pii_egress_threshold:
+        return Finding(
+            "pii-volume", Decision.BLOCK,
+            f"Outbound call carries {len(sensitive)} records with sensitive fields "
+            f"(threshold {policy.pii_egress_threshold}).",
+        )
+    return None
+
+
+DEFAULT_RULES: tuple[Rule, ...] = (
+    rule_instruction_override,
+    rule_exfil_instruction,
+    rule_role_spoof,
+    rule_external_recipient,
+    rule_pii_volume,
+)
+
+
+def inspect(ev: Event, policy: Policy, rules: tuple[Rule, ...] = DEFAULT_RULES) -> Verdict:
+    """Run every rule, keep all findings, and resolve to the most severe decision."""
+    findings = [f for rule in rules if (f := rule(ev, policy)) is not None]
+    decision = max((f.decision for f in findings), default=Decision.ALLOW)
+    return Verdict(decision=decision, findings=findings)

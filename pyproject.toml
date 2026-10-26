@@ -1,0 +1,29 @@
+[project]
+name = "airlock"
+version = "0.1.0"
+description = "An inspection gateway that quarantines prompt injection and data exfiltration before it reaches a tool-using AI agent."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["mcp", "ai-agents", "prompt-injection", "security", "guardrail"]
+
+dependencies = [
+    # The MCP gateway (src/airlock/gateway.py) and mock servers.
+    "mcp>=1.2.0",
+]
+
+[project.optional-dependencies]
+# Local-LLM classifier layer. Talks to a local Ollama server over HTTP.
+classifier = ["httpx>=0.27"]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/airlock"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

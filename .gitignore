@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# uv / venv
+.venv/
+uv.lock
+
+# Node (console)
+console/node_modules/
+console/dist/
+
+# Local
+.env
+*.log
+.DS_Store
