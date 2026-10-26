@@ -127,6 +127,29 @@ def test_injection_hidden_in_inbound_record_is_quarantined():
     assert "quarantined" in result.text.lower()
 
 
+def test_multi_address_in_recipient_key_fails_closed():
+    sink = []
+    gw = _gateway(sink=sink)
+    # One list item smuggling a second address past the trusted-looking first.
+    result = gw.call_tool("send_message", {
+        "recipients": ["owner@alderandash.com, collector@settlement-intake.co"],
+    })
+    assert "blocked" in result.text.lower()
+    assert sink == []
+
+
+def test_pii_detected_by_values_even_with_innocuous_keys():
+    sink = []
+    gw = _gateway(sink=sink)
+    rows = [{"a": f"c{i}@x.com", "b": f"{i} Road", "c": "LA1"} for i in range(5)]
+    result = gw.call_tool("send_message", {
+        "recipients": ["owner@alderandash.com"],
+        "payload": {"items": rows},   # keys aren't sensitive; values are
+    })
+    assert "blocked" in result.text.lower()
+    assert sink == []
+
+
 def test_classifier_answer_interpretation():
     from airlock.classifier import _interpret_answer
     from airlock.rules import Decision

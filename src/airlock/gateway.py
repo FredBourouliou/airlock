@@ -24,7 +24,7 @@ from typing import Callable, Optional
 from airlock.audit import AuditLog
 from airlock.rules import (
     _EMAIL_RE,
-    _SENSITIVE_FIELDS,
+    _record_is_sensitive,
     Decision,
     Direction,
     Event,
@@ -43,6 +43,14 @@ Classifier = Callable[[str], Optional[Finding]]
 # A guard must not trust the agent to put data in the keys it expects. We walk
 # the whole argument/result structure, not a chosen few keys.
 
+# Keys whose string values are recipients: those are checked RAW by the strict
+# grammar, so a weird or multi-address value fails closed (untrusted).
+_RECIPIENT_KEYS = frozenset({
+    "recipients", "recipient", "to", "cc", "bcc", "dest", "destination",
+    "mailto", "email", "emails", "send_to", "sendto",
+})
+
+
 def _walk_strings(obj: object):
     if isinstance(obj, dict):
         for v in obj.values():
@@ -54,30 +62,44 @@ def _walk_strings(obj: object):
         yield obj
 
 
-def _all_addresses(obj: object) -> list[str]:
-    """Every email address anywhere in the structure. Fail-closed: an outbound
-    call carrying any untrusted address in any field is treated as a send to it."""
-    blob = json.dumps(obj, default=str, ensure_ascii=False)
-    return _EMAIL_RE.findall(blob)
+def _candidate_recipients(obj: object) -> list[str]:
+    """Recipient candidates for the strict allowlist check. A string under a
+    recipient-bearing key is passed through RAW (so a multi-address or malformed
+    value fails closed); addresses embedded anywhere else are added as extra
+    candidates via the regex."""
+    cands: list[str] = []
 
+    def walk(o: object, in_dest: bool) -> None:
+        if isinstance(o, dict):
+            for k, v in o.items():
+                walk(v, in_dest or str(k).strip().lower() in _RECIPIENT_KEYS)
+        elif isinstance(o, (list, tuple, set)):
+            for x in o:
+                walk(x, in_dest)
+        elif isinstance(o, str):
+            if in_dest:
+                cands.append(o)
+            else:
+                cands.extend(_EMAIL_RE.findall(o))
 
-def _shallow_sensitive(d: dict) -> bool:
-    return any(any(s in str(k).lower() for s in _SENSITIVE_FIELDS) for k in d)
+    walk(obj, False)
+    return cands
 
 
 def _collect_records(obj: object) -> list[dict]:
-    """Every dict that itself holds a sensitive field, at any depth."""
+    """Record units for the PII-volume rule: dict elements of any list, at any
+    depth, kept when _record_is_sensitive (which scans keys AND values)."""
     out: list[dict] = []
 
     def walk(o: object) -> None:
-        if isinstance(o, dict):
-            if _shallow_sensitive(o):
-                out.append(o)
+        if isinstance(o, (list, tuple, set)):
+            for x in o:
+                if isinstance(x, dict) and _record_is_sensitive(x):
+                    out.append(x)
+                walk(x)
+        elif isinstance(o, dict):
             for v in o.values():
                 walk(v)
-        elif isinstance(o, (list, tuple, set)):
-            for x in o:
-                walk(x)
 
     walk(obj)
     return out
@@ -146,7 +168,7 @@ class AirlockGateway:
             direction=Direction.OUTBOUND,
             tool=name,
             text=json.dumps(args, default=str, ensure_ascii=False),
-            recipients=_all_addresses(args),
+            recipients=_candidate_recipients(args),
             records=_collect_records(args),
         )
         out_verdict = inspect(out_ev, self.policy)
