@@ -164,6 +164,13 @@ def test_homoglyph_domain_is_not_trusted():
     assert not POLICY.recipient_is_trusted("owner@alderandаsh.com")
 
 
+def test_compatibility_at_sign_is_not_laundered_into_trust():
+    # A compatibility '@' (U+FE6B) or trailing zero-width must NOT be cleaned up
+    # and then trusted: trust is decided on the raw value that will be sent.
+    assert not POLICY.recipient_is_trusted("owner﹫alderandash.com")
+    assert not POLICY.recipient_is_trusted("owner@alderandash.com​")
+
+
 def test_most_severe_decision_wins():
     # role-spoof (FLAG) + instruction-override (BLOCK) in one payload -> BLOCK
     ev = Event(Direction.INBOUND, "read_web",

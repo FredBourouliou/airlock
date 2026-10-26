@@ -100,17 +100,19 @@ class Policy:
     pii_egress_threshold: int = 5  # distinct records with sensitive fields
 
     def recipient_is_trusted(self, address: str) -> bool:
-        # Strip invisibles/marks but DO NOT fold homoglyphs here: folding a
-        # look-alike domain to ASCII would make a spoof pass as the org domain.
-        # Non-ASCII is then rejected by the strict address grammar below.
-        address = _canonicalize(address, fold=False).strip()
-        # Strict: exactly one clean address. A string holding a list, separators,
-        # a display name or angle brackets is rejected outright, so Airlock and the
-        # downstream mail tool can never disagree on who the real recipient is.
-        m = _SINGLE_ADDR_RE.match(address)
+        # Decide trust on the RAW value, exactly as it will be sent. We must not
+        # canonicalize first: stripping an invisible char or NFKC-mapping a
+        # compatibility '@' could launder a hostile address into a trusted-looking
+        # one while a different string is actually transmitted (parser differential).
+        raw = address.strip()
+        if not raw.isascii():
+            return False
+        # Strict grammar: exactly one clean ASCII address. A list, separators, a
+        # display name, brackets or '%'/'!' routing chars are all rejected.
+        m = _SINGLE_ADDR_RE.match(raw)
         if not m:
             return False
-        if address.lower() in {a.lower() for a in self.allowlist_recipients}:
+        if raw.lower() in {a.lower() for a in self.allowlist_recipients}:
             return True
         domain = m.group(1).rstrip(".").lower()
         if self.org_domain and domain == self.org_domain.lower():
