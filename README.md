@@ -48,6 +48,18 @@ Early work in progress.
 - [ ] Live SOC-style web console
 - [ ] Demo scenarios (email · web · shopping)
 
+## Known limitations
+
+Airlock fails closed, so these bias toward over-blocking, never toward letting an
+attack through:
+
+- Homoglyph defence folds a curated set of common Cyrillic/Greek look-alikes, not
+  a full [UTS&nbsp;#39](https://www.unicode.org/reports/tr39/) confusables skeleton.
+- Internationalised (non-ASCII) email addresses are treated as untrusted, because
+  the allowlist check requires a strict ASCII address; IDNA validation is not done.
+- The deterministic rules are signatures, not a proof. The local-LLM layer exists
+  precisely to catch phrasings the signatures miss.
+
 ## Develop
 
 ```bash
