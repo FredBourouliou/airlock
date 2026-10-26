@@ -11,10 +11,28 @@ findings, never override a deterministic BLOCK.
 
 from __future__ import annotations
 
+import html
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Callable, Optional
+
+
+def normalize_text(s: str) -> str:
+    """Canonicalise inbound text before matching, so an attacker can't slip an
+    injection past the signatures with zero-width characters, HTML entities or
+    compatibility look-alikes. Decode entities, apply NFKC, drop format chars
+    (category Cf: zero-width space, joiners, BOM, ...)."""
+    s = html.unescape(s)
+    s = unicodedata.normalize("NFKC", s)
+    return "".join(ch for ch in s if unicodedata.category(ch) != "Cf")
+
+
+# A single clean address: exactly one '@', no separators, quotes or brackets.
+# Anything else (a list, a display name, embedded commas) is rejected outright,
+# so Airlock and the downstream mail tool can never disagree on the recipient.
+_SINGLE_ADDR_RE = re.compile(r"^[^\s,;:<>\"'@]+@([^\s,;:<>\"'@]+)$")
 
 
 class Direction(IntEnum):
@@ -37,12 +55,16 @@ class Policy:
     pii_egress_threshold: int = 5  # distinct records with sensitive fields
 
     def recipient_is_trusted(self, address: str) -> bool:
-        address = address.strip().lower()
-        if not address:
+        address = address.strip()
+        # Strict: exactly one clean address. A string holding a list, separators,
+        # a display name or angle brackets is rejected outright, so Airlock and the
+        # downstream mail tool can never disagree on who the real recipient is.
+        m = _SINGLE_ADDR_RE.match(address)
+        if not m:
             return False
-        if address in {a.lower() for a in self.allowlist_recipients}:
+        if address.lower() in {a.lower() for a in self.allowlist_recipients}:
             return True
-        domain = address.rsplit("@", 1)[-1]
+        domain = m.group(1).rstrip(".").lower()
         if self.org_domain and domain == self.org_domain.lower():
             return True
         return domain in {d.lower() for d in self.allowlist_domains}
@@ -104,10 +126,27 @@ _ROLE_SPOOF_RE = re.compile(
 _SENSITIVE_FIELDS = ("email", "address", "address1", "postal", "postcode",
                      "zip", "phone", "card", "ssn", "iban")
 
+# A loose card-number shape (13-19 digits, optional spaces/dashes).
+_CARD_RE = re.compile(r"\b(?:\d[ -]?){13,19}\b")
 
-def _record_is_sensitive(row: dict) -> bool:
-    keys = {k.lower() for k in row}
-    return any(any(s in k for s in _SENSITIVE_FIELDS) for k in keys)
+
+def _record_is_sensitive(obj: object) -> bool:
+    """Recursively decide whether a payload carries personal data. Walks nested
+    dicts and lists, checks every key name, and scans string values for emails
+    and card-number shapes — so nesting the data can't hide it from the check."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            key = str(k).lower()
+            if any(s in key for s in _SENSITIVE_FIELDS):
+                return True
+            if _record_is_sensitive(v):
+                return True
+        return False
+    if isinstance(obj, (list, tuple, set)):
+        return any(_record_is_sensitive(x) for x in obj)
+    if isinstance(obj, str):
+        return bool(_EMAIL_RE.search(obj) or _CARD_RE.search(obj))
+    return False
 
 
 # --- rules --------------------------------------------------------------------
@@ -117,7 +156,7 @@ Rule = Callable[[Event, Policy], Optional[Finding]]
 
 
 def rule_instruction_override(ev: Event, policy: Policy) -> Optional[Finding]:
-    if ev.direction is Direction.INBOUND and _OVERRIDE_RE.search(ev.text):
+    if ev.direction is Direction.INBOUND and _OVERRIDE_RE.search(normalize_text(ev.text)):
         return Finding(
             "instruction-override", Decision.BLOCK,
             "Inbound content tries to override the agent's standing instructions.",
@@ -129,9 +168,10 @@ def rule_exfil_instruction(ev: Event, policy: Policy) -> Optional[Finding]:
     """Inbound content that instructs the agent to send data to an outside address."""
     if ev.direction is not Direction.INBOUND:
         return None
-    if not _EXFIL_VERB_RE.search(ev.text):
+    text = normalize_text(ev.text)
+    if not _EXFIL_VERB_RE.search(text):
         return None
-    outside = [a for a in _EMAIL_RE.findall(ev.text) if not policy.recipient_is_trusted(a)]
+    outside = [a for a in _EMAIL_RE.findall(text) if not policy.recipient_is_trusted(a)]
     if outside:
         return Finding(
             "exfil-instruction", Decision.BLOCK,
@@ -142,7 +182,7 @@ def rule_exfil_instruction(ev: Event, policy: Policy) -> Optional[Finding]:
 
 
 def rule_role_spoof(ev: Event, policy: Policy) -> Optional[Finding]:
-    if ev.direction is Direction.INBOUND and _ROLE_SPOOF_RE.search(ev.text):
+    if ev.direction is Direction.INBOUND and _ROLE_SPOOF_RE.search(normalize_text(ev.text)):
         return Finding(
             "role-spoof", Decision.FLAG,
             "Inbound content impersonates a system/tool role.",
@@ -151,10 +191,14 @@ def rule_role_spoof(ev: Event, policy: Policy) -> Optional[Finding]:
 
 
 def rule_external_recipient(ev: Event, policy: Policy) -> Optional[Finding]:
-    """Outbound send/transfer to a recipient outside the policy allowlist."""
+    """Any outbound call that carries recipients off the policy allowlist.
+
+    Fail closed: we check recipients on *every* outbound event that has them,
+    whatever the tool is named — a tool called 'notify' or 'webhook' can exfiltrate
+    just as well as one called 'send_email'."""
     if ev.direction is not Direction.OUTBOUND:
         return None
-    if not re.search(r"send|transfer|email|message|forward", ev.tool, re.I):
+    if not ev.recipients:
         return None
     outside = [a for a in ev.recipients if not policy.recipient_is_trusted(a)]
     if outside:
