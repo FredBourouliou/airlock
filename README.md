@@ -42,11 +42,17 @@ on, uncontaminated.
 Early work in progress.
 
 - [x] Deterministic inspection engine + tests (`src/airlock/rules.py`)
-- [ ] MCP gateway wrapping mock tool servers
-- [ ] Local-LLM classifier layer (Ollama)
-- [ ] Hash-chained audit log
+- [x] Interception gateway + mock tool servers (`src/airlock/gateway.py`, `tools.py`)
+- [x] Local-LLM classifier layer via Ollama (`src/airlock/classifier.py`)
+- [x] Hash-chained audit log (`src/airlock/audit.py`)
 - [ ] Live SOC-style web console
 - [ ] Demo scenarios (email · web · shopping)
+
+The gateway is an MCP-*shaped* interception layer (tools have an MCP-like
+name/description/call surface); exposing it over the real MCP wire protocol is a
+thin adapter, kept as the `mcp` optional extra. The core has **no runtime
+dependencies** — engine, gateway, audit and the Ollama client are all standard
+library.
 
 ## Known limitations
 
