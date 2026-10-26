@@ -16,12 +16,15 @@ never lower a deterministic block.
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from airlock.audit import AuditLog
 from airlock.rules import (
+    _EMAIL_RE,
+    _SENSITIVE_FIELDS,
     Decision,
     Direction,
     Event,
@@ -34,6 +37,50 @@ from airlock.tools import Tool, ToolResult
 
 # A classifier takes inbound text and may return one extra Finding.
 Classifier = Callable[[str], Optional[Finding]]
+
+
+# --- comprehensive extraction -------------------------------------------------
+# A guard must not trust the agent to put data in the keys it expects. We walk
+# the whole argument/result structure, not a chosen few keys.
+
+def _walk_strings(obj: object):
+    if isinstance(obj, dict):
+        for v in obj.values():
+            yield from _walk_strings(v)
+    elif isinstance(obj, (list, tuple, set)):
+        for x in obj:
+            yield from _walk_strings(x)
+    elif isinstance(obj, str):
+        yield obj
+
+
+def _all_addresses(obj: object) -> list[str]:
+    """Every email address anywhere in the structure. Fail-closed: an outbound
+    call carrying any untrusted address in any field is treated as a send to it."""
+    blob = json.dumps(obj, default=str, ensure_ascii=False)
+    return _EMAIL_RE.findall(blob)
+
+
+def _shallow_sensitive(d: dict) -> bool:
+    return any(any(s in str(k).lower() for s in _SENSITIVE_FIELDS) for k in d)
+
+
+def _collect_records(obj: object) -> list[dict]:
+    """Every dict that itself holds a sensitive field, at any depth."""
+    out: list[dict] = []
+
+    def walk(o: object) -> None:
+        if isinstance(o, dict):
+            if _shallow_sensitive(o):
+                out.append(o)
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, (list, tuple, set)):
+            for x in o:
+                walk(x)
+
+    walk(obj)
+    return out
 
 
 @dataclass
@@ -94,13 +141,13 @@ class AirlockGateway:
         if name not in self.tools:
             raise KeyError(f"unknown tool: {name}")
 
-        # 1) OUTBOUND: inspect the call the agent wants to make.
+        # 1) OUTBOUND: inspect the whole call, not the keys we happen to expect.
         out_ev = Event(
             direction=Direction.OUTBOUND,
             tool=name,
-            text=args.get("body", ""),
-            recipients=list(args.get("recipients", [])),
-            records=list(args.get("records", [])),
+            text=json.dumps(args, default=str, ensure_ascii=False),
+            recipients=_all_addresses(args),
+            records=_collect_records(args),
         )
         out_verdict = inspect(out_ev, self.policy)
         if out_verdict.blocked:
@@ -112,11 +159,14 @@ class AirlockGateway:
         # 2) Execute the real tool.
         result = self.tools[name](args)
 
-        # 3) INBOUND: inspect what comes back before the agent sees it.
+        # 3) INBOUND: inspect what comes back — including string values hidden in
+        # records, where an injection could otherwise ride in unscanned.
+        record_text = "\n".join(_walk_strings(result.records))
+        scanned = result.text if not record_text else f"{result.text}\n{record_text}"
         in_ev = Event(direction=Direction.INBOUND, tool=name,
-                      text=result.text, records=result.records)
+                      text=scanned, records=result.records)
         in_verdict = inspect(in_ev, self.policy)
-        in_verdict = self._apply_classifier(in_verdict, result.text)
+        in_verdict = self._apply_classifier(in_verdict, scanned)
         if in_verdict.blocked:
             self._emit(Direction.INBOUND, name, in_verdict, quarantined=True)
             return ToolResult(text=_PLACEHOLDER)
