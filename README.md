@@ -3,6 +3,8 @@
 **An inspection gateway that quarantines prompt injection and data exfiltration
 before it reaches a tool-using AI agent.**
 
+▶ **Demo video (2:29):** https://youtu.be/SkM0ZLkuu8g
+
 An AI agent that reads email, browses the web and calls tools will, sooner or
 later, read something written to hijack it — an email, a web page, a document
 crafted to make it exfiltrate data or take an action it was never asked to.
