@@ -180,6 +180,27 @@ _SENSITIVE_FIELDS = ("email", "address", "address1", "postal", "postcode",
 _CARD_RE = re.compile(r"\b(?:\d[ -]?){13,19}\b")
 
 
+def _luhn_ok(digits: str) -> bool:
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        d = int(ch)
+        if i % 2:
+            d = d * 2 - 9 if d > 4 else d * 2
+        total += d
+    return total % 10 == 0
+
+
+def _distinct_cards(text: str) -> set[str]:
+    """Card numbers pasted as plain text (Luhn-checked, so ids and timestamps of
+    the same length don't count)."""
+    found = set()
+    for m in _CARD_RE.finditer(text):
+        digits = re.sub(r"\D", "", m.group())
+        if 13 <= len(digits) <= 19 and _luhn_ok(digits):
+            found.add(digits)
+    return found
+
+
 def _record_is_sensitive(obj: object) -> bool:
     """Recursively decide whether a payload carries personal data. Walks nested
     dicts and lists, checks every key name, and scans string values for emails
@@ -260,14 +281,22 @@ def rule_external_recipient(ev: Event, policy: Policy) -> Optional[Finding]:
 
 
 def rule_pii_volume(ev: Event, policy: Policy) -> Optional[Finding]:
-    """Outbound payload carrying sensitive records above the egress threshold."""
+    """Outbound payload carrying sensitive records above the egress threshold —
+    as structured records, or as card numbers pasted into free text."""
     if ev.direction is not Direction.OUTBOUND:
         return None
     sensitive = [r for r in ev.records if _record_is_sensitive(r)]
+    cards = _distinct_cards(ev.text)
     if len(sensitive) >= policy.pii_egress_threshold:
         return Finding(
             "pii-volume", Decision.BLOCK,
             f"Outbound call carries {len(sensitive)} records with sensitive fields "
+            f"(threshold {policy.pii_egress_threshold}).",
+        )
+    if len(cards) >= policy.pii_egress_threshold:
+        return Finding(
+            "pii-volume", Decision.BLOCK,
+            f"Outbound call carries {len(cards)} card numbers in its text "
             f"(threshold {policy.pii_egress_threshold}).",
         )
     return None

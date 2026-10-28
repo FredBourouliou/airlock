@@ -52,27 +52,38 @@ _RECIPIENT_KEYS = frozenset({
 
 
 def _walk_strings(obj: object):
+    """Every piece of text in a structure: dict keys as well as values, and
+    non-string scalars as their str() — an injection can ride in a key too."""
     if isinstance(obj, dict):
-        for v in obj.values():
+        for k, v in obj.items():
+            yield str(k)
             yield from _walk_strings(v)
     elif isinstance(obj, (list, tuple, set)):
         for x in obj:
             yield from _walk_strings(x)
     elif isinstance(obj, str):
         yield obj
+    elif obj is not None:
+        yield str(obj)
 
 
 def _candidate_recipients(obj: object) -> list[str]:
-    """Recipient candidates for the strict allowlist check. A string under a
-    recipient-bearing key is passed through RAW (so a multi-address or malformed
-    value fails closed); addresses embedded anywhere else are added as extra
-    candidates via the regex."""
+    """Recipient candidates for the strict allowlist check. Anything under a
+    recipient-bearing key — string values, dict keys, non-string scalars — is
+    passed through RAW, so a multi-address, malformed or non-string value fails
+    closed. Addresses embedded anywhere else (values or keys) are added as extra
+    candidates via the regex, and so is any address visible in the serialized call."""
     cands: list[str] = []
 
     def walk(o: object, in_dest: bool) -> None:
         if isinstance(o, dict):
             for k, v in o.items():
-                walk(v, in_dest or str(k).strip().lower() in _RECIPIENT_KEYS)
+                key = str(k)
+                if in_dest:
+                    cands.append(key)
+                else:
+                    cands.extend(_EMAIL_RE.findall(key))
+                walk(v, in_dest or key.strip().lower() in _RECIPIENT_KEYS)
         elif isinstance(o, (list, tuple, set)):
             for x in o:
                 walk(x, in_dest)
@@ -81,27 +92,38 @@ def _candidate_recipients(obj: object) -> list[str]:
                 cands.append(o)
             else:
                 cands.extend(_EMAIL_RE.findall(o))
+        elif in_dest and o is not None:
+            cands.append(str(o))   # a non-string recipient can't be validated
 
     walk(obj, False)
+    cands.extend(_EMAIL_RE.findall(json.dumps(obj, default=str, ensure_ascii=False)))
     return cands
 
 
 def _collect_records(obj: object) -> list[dict]:
-    """Record units for the PII-volume rule: dict elements of any list, at any
-    depth, kept when _record_is_sensitive (which scans keys AND values)."""
+    """Record units for the PII-volume rule: the innermost sensitive dicts at any
+    depth — list elements and dict values alike, so `{"c1": {...}, "c2": {...}}`
+    counts two records. A dict that only wraps sensitive dicts isn't counted
+    itself, so nesting one record deeply doesn't inflate the count. The call's
+    own top-level arguments are never a record."""
     out: list[dict] = []
 
-    def walk(o: object) -> None:
+    def walk(o: object) -> bool:
+        """Walk `o`; return True if it is or contains a counted record."""
+        if isinstance(o, dict):
+            inner = [walk(v) for v in o.values()]
+            if any(inner):
+                return True
+            if _record_is_sensitive(o):
+                out.append(o)
+                return True
+            return False
         if isinstance(o, (list, tuple, set)):
-            for x in o:
-                if isinstance(x, dict) and _record_is_sensitive(x):
-                    out.append(x)
-                walk(x)
-        elif isinstance(o, dict):
-            for v in o.values():
-                walk(v)
+            return any([walk(x) for x in o])
+        return False
 
-    walk(obj)
+    for v in (obj.values() if isinstance(obj, dict) else [obj]):
+        walk(v)
     return out
 
 
