@@ -48,6 +48,7 @@ Classifier = Callable[[str], Optional[Finding]]
 _RECIPIENT_KEYS = frozenset({
     "recipients", "recipient", "to", "cc", "bcc", "dest", "destination",
     "mailto", "email", "emails", "send_to", "sendto",
+    "payee", "pay_to", "beneficiary",
 })
 
 
@@ -137,7 +138,10 @@ class GatewayEvent:
     rules: list[tuple[str, str]]  # (rule_id, reason)
     summary: str
     quarantined: bool
+    detail: str = ""        # literal excerpt of what was inspected (for the console)
 
+
+_DETAIL_MAX = 600
 
 _PLACEHOLDER = "[Airlock: content quarantined — suspected prompt injection or data exfiltration]"
 
@@ -157,7 +161,7 @@ class AirlockGateway:
     # -- event plumbing --------------------------------------------------------
 
     def _emit(self, direction: Direction, tool: str, verdict: Verdict,
-              quarantined: bool) -> GatewayEvent:
+              quarantined: bool, detail: str = "") -> GatewayEvent:
         dname = "inbound" if direction is Direction.INBOUND else "outbound"
         decision = verdict.decision.name.lower()
         rules = [(f.rule_id, f.reason) for f in verdict.findings]
@@ -166,6 +170,7 @@ class AirlockGateway:
         ev = GatewayEvent(
             seq=self._seq, ts=time.time(), direction=dname, tool=tool,
             decision=decision, rules=rules, summary=summary, quarantined=quarantined,
+            detail=detail[:_DETAIL_MAX],
         )
         self._seq += 1
         self.audit.append(
@@ -195,10 +200,12 @@ class AirlockGateway:
         )
         out_verdict = inspect(out_ev, self.policy)
         if out_verdict.blocked:
-            self._emit(Direction.OUTBOUND, name, out_verdict, quarantined=True)
+            self._emit(Direction.OUTBOUND, name, out_verdict, quarantined=True,
+                       detail=out_ev.text)
             reason = out_verdict.findings[0].reason
             return ToolResult(text=f"[Airlock blocked this call: {reason}]")
-        self._emit(Direction.OUTBOUND, name, out_verdict, quarantined=False)
+        self._emit(Direction.OUTBOUND, name, out_verdict, quarantined=False,
+                   detail=out_ev.text)
 
         # 2) Execute the real tool.
         result = self.tools[name](args)
@@ -212,9 +219,11 @@ class AirlockGateway:
         in_verdict = inspect(in_ev, self.policy)
         in_verdict = self._apply_classifier(in_verdict, scanned)
         if in_verdict.blocked:
-            self._emit(Direction.INBOUND, name, in_verdict, quarantined=True)
+            self._emit(Direction.INBOUND, name, in_verdict, quarantined=True,
+                       detail=scanned)
             return ToolResult(text=_PLACEHOLDER)
-        self._emit(Direction.INBOUND, name, in_verdict, quarantined=False)
+        self._emit(Direction.INBOUND, name, in_verdict, quarantined=False,
+                   detail=scanned)
         return result
 
     def _apply_classifier(self, verdict: Verdict, text: str) -> Verdict:

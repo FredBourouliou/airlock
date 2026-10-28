@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Airlock inspection console</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='1' width='14' height='14' rx='2' fill='%23202833'/%3E%3Crect x='7' y='3' width='2' height='10' fill='%23e0704f'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="console.css">
+<script src="console.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <div class="mark">
+    <span class="mark-word">Airlock</span>
+    <span class="mark-sub">Inspection gateway for tool-using agents</span>
+  </div>
+  <dl class="policy" id="policy" aria-label="Policy">
+    <div><dt>Org domain</dt><dd id="p-org">—</dd></div>
+    <div><dt>Approved payees</dt><dd id="p-domains">—</dd></div>
+    <div><dt>PII egress limit</dt><dd id="p-pii">—</dd></div>
+    <div><dt>Local model</dt><dd id="p-model">—</dd></div>
+  </dl>
+  <div class="chain" id="chain" aria-live="polite">
+    <span class="chain-label">Audit chain</span>
+    <span class="chain-value" id="chain-value">no entries yet</span>
+  </div>
+</header>
+
+<div class="layout">
+  <nav class="rail" aria-label="Scenarios">
+    <h2 class="rail-title">Scenarios</h2>
+    <ol class="scenarios" id="scenarios"></ol>
+    <p class="rail-note">
+      The agent is scripted to obey any instruction it reads: the worst case.
+      Every scenario runs twice on fresh mock tools: unguarded, then through Airlock.
+    </p>
+  </nav>
+
+  <main class="main">
+    <section class="compare" aria-label="Outcome">
+      <div class="side side-without">
+        <h2 class="side-title">Without Airlock</h2>
+        <ul class="side-body" id="without"><li class="muted">Run a scenario.</li></ul>
+      </div>
+      <div class="side side-with">
+        <h2 class="side-title">With Airlock</h2>
+        <ul class="side-body" id="with"><li class="muted">—</li></ul>
+      </div>
+    </section>
+
+    <section class="log-wrap" aria-label="Inspection log">
+      <div class="log-head">
+        <h2 class="log-title" id="log-title">Inspection log</h2>
+        <span class="legend">
+          <span class="v v-allow">allow</span>
+          <span class="v v-flag">flag</span>
+          <span class="v v-block">block</span>
+        </span>
+      </div>
+      <ol class="log" id="log" aria-live="polite" tabindex="0">
+        <li class="empty">
+          Pick a scenario on the left. Each tool call is inspected twice, on the way
+          out (its arguments) and on the way back (what it returned). Every decision
+          lands here with the rule that made it.
+        </li>
+      </ol>
+    </section>
+  </main>
+</div>
+
+<template id="t-verdict">
+  <li class="row">
+    <span class="seq"></span>
+    <div class="lane" aria-hidden="true">
+      <span class="node node-a"></span><span class="wire"></span><span class="gate"></span><span class="wire wire-b"></span><span class="node node-b"></span>
+    </div>
+    <div class="what">
+      <div class="what-head">
+        <span class="v"></span>
+        <span class="dir"></span>
+        <span class="rules"></span>
+      </div>
+      <p class="reason"></p>
+      <pre class="detail"></pre>
+    </div>
+  </li>
+</template>
+</body>
+</html>

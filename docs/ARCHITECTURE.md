@@ -1,7 +1,8 @@
 # Architecture
 
-Airlock is an **MCP gateway**: it speaks MCP to the agent on one side and to the
-real tool servers on the other, inspecting everything that crosses.
+Airlock is an **MCP-shaped gateway**: it sits between the agent and its tool
+servers, inspecting everything that crosses. Tools expose an MCP-like
+name/description/call surface; the real MCP wire adapter is planned (`mcp` extra).
 
 ## Flow
 
@@ -39,8 +40,8 @@ PII egress threshold.
 ### 2. Local-LLM classifier (optional) — `src/airlock/classifier.py`
 
 Asks a model running locally via Ollama: *"Does this content attempt to manipulate
-the agent into acting against its principal?"* Returns a risk score and a short
-rationale. Used mainly on inbound content, to catch novel phrasing the signatures
+the agent into acting against its principal?"* The model answers YES or NO
+(anything ambiguous is treated as a FLAG). Used on inbound content, to catch novel phrasing the signatures
 miss. It can raise a `FLAG`/`BLOCK`, but can never downgrade a deterministic block.
 
 ## Demo
@@ -51,7 +52,9 @@ injected content and the targeted tool change:
 - **Email** — an email-ops agent reads its inbox; a planted message tries to make
   it export customer records to an outside address.
 - **Web** — a research agent fetches a page that carries hidden instructions.
-- **Shopping** — a purchasing agent is pushed to redirect a payment.
+- **Supplier payment** — a payables agent reads an invoice page whose quiet
+  "remittance account changed" notice redirects the payment. No signature fires
+  on the content; the outbound payee check stops the money.
 
 The console shows, per event, the verdict and — the point that sells it — what the
 agent *would* have done without Airlock.
