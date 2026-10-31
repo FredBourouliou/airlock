@@ -17,6 +17,7 @@ never lower a deterministic block.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -48,8 +49,17 @@ Classifier = Callable[[str], Optional[Finding]]
 _RECIPIENT_KEYS = frozenset({
     "recipients", "recipient", "to", "cc", "bcc", "dest", "destination",
     "mailto", "email", "emails", "send_to", "sendto",
-    "payee", "pay_to", "beneficiary", "iban", "account", "account_number",
+    "payee", "pay_to", "beneficiary",
 })
+# Payment destinations, matched as words so `ibanNumber`, `account-number` or
+# `dest_wallet` count too. Over-matching only holds a call for review.
+_PAYMENT_WORDS = frozenset({"iban", "account", "acct", "routing", "swift", "bic", "wallet"})
+
+
+def _is_recipient_key(key: str) -> bool:
+    words = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key.strip())
+    words = re.split(r"[^a-z0-9]+", words.lower())
+    return "_".join(w for w in words if w) in _RECIPIENT_KEYS or bool(_PAYMENT_WORDS.intersection(words))
 
 
 def _walk_strings(obj: object):
@@ -84,7 +94,7 @@ def _candidate_recipients(obj: object) -> list[str]:
                     cands.append(key)
                 else:
                     cands.extend(_EMAIL_RE.findall(key))
-                walk(v, in_dest or key.strip().lower() in _RECIPIENT_KEYS)
+                walk(v, in_dest or _is_recipient_key(key))
         elif isinstance(o, (list, tuple, set)):
             for x in o:
                 walk(x, in_dest)

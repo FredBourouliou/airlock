@@ -211,10 +211,13 @@ def test_non_string_value_under_recipient_key_fails_closed():
     result = gw.call_tool("send_message", {"to": 4155550100, "body": "fyi"})
     assert "blocked" in result.text.lower()
     assert sink == []
-    # A foreign account next to a trusted payee is a destination too.
-    result = gw.call_tool("send_message", {"to": "boss@acme-corp.com", "iban": "FR7612345", "body": "fyi"})
-    assert "blocked" in result.text.lower()
+    # A foreign account next to a trusted recipient is a destination too, however the key is spelled.
+    for key in ("iban", "ibanNumber", "account-number", "dest_wallet", "SWIFT"):
+        result = gw.call_tool("send_message", {"to": "owner@alderandash.com", key: "FR7612345", "body": "fyi"})
+        assert "blocked" in result.text.lower(), key
     assert sink == []
+    gw.call_tool("send_message", {"to": "owner@alderandash.com", "body": "fyi"})
+    assert len(sink) == 1
 
 
 def test_empty_recipient_value_is_not_a_candidate():

@@ -102,7 +102,7 @@ Built with the help of Claude Code (Anthropic): code, tests and write-up, review
 The recipient check fails closed on the destinations it recognises. Airlock is not
 a complete defence:
 
-- Only email addresses and payment fields are checked as destinations. A URL or
+- Only email addresses and payment fields recognised by name are checked as destinations. A URL or
   webhook is not: a `read_web` call to an attacker's URL with data in the query
   string, or a message sent to a webhook, is not blocked.
 - False positives are real. A customer email saying "could you send me a copy of
