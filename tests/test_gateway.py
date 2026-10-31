@@ -213,7 +213,7 @@ def test_non_string_value_under_recipient_key_fails_closed():
     assert sink == []
     # A foreign account next to a trusted recipient is a destination too, however the key is spelled.
     for key in ("iban", "ibanNumber", "IBANNumber", "iBAN", "account-number", "bank_accounts", "wallet2", "SWIFT",
-                "bic", "mailTo", "eMail", "bCC", "send-to"):
+                "bic", "bicCode", "destBic", "beneficiaryBIC", "mailTo", "eMail", "bCC", "send-to"):
         result = gw.call_tool("send_message", {"to": "owner@alderandash.com", key: "FR7612345", "body": "fyi"})
         assert "blocked" in result.text.lower(), key
     assert sink == []

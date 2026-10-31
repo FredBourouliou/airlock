@@ -53,8 +53,8 @@ _RECIPIENT_KEYS = frozenset({
 })
 # Keys are compared without case or separators, so `mailTo`, `BCC` and `send-to`
 # all match. Payment terms match anywhere in the key (`IBANNumber`, `bank_accounts`,
-# `wallet2`); over-matching only holds a call for review. `bic` stays a whole word,
-# or it would match `public`.
+# `wallet2`, `bicCode`); over-matching only holds a call for review, and `public`
+# is the one common word excluded for `bic`.
 _RECIPIENT_COMPACT = frozenset(k.replace("_", "") for k in _RECIPIENT_KEYS)
 _PAYMENT_STEMS = ("iban", "account", "acct", "routing", "swift", "wallet")
 
@@ -63,7 +63,7 @@ def _is_recipient_key(key: str) -> bool:
     compact = re.sub(r"[^a-z0-9]+", "", key.lower())
     if compact in _RECIPIENT_COMPACT or any(stem in compact for stem in _PAYMENT_STEMS):
         return True
-    return "bic" in re.split(r"[^a-z0-9]+", key.lower())
+    return "bic" in compact and "public" not in compact
 
 
 def _walk_strings(obj: object):
