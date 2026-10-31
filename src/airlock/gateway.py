@@ -63,7 +63,7 @@ def _is_recipient_key(key: str) -> bool:
     compact = re.sub(r"[^a-z0-9]+", "", key.lower())
     if compact in _RECIPIENT_COMPACT or any(stem in compact for stem in _PAYMENT_STEMS):
         return True
-    return "bic" in compact and "public" not in compact
+    return "bic" in compact.replace("public", "")
 
 
 def _walk_strings(obj: object):
