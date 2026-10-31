@@ -48,7 +48,7 @@ Classifier = Callable[[str], Optional[Finding]]
 _RECIPIENT_KEYS = frozenset({
     "recipients", "recipient", "to", "cc", "bcc", "dest", "destination",
     "mailto", "email", "emails", "send_to", "sendto",
-    "payee", "pay_to", "beneficiary",
+    "payee", "pay_to", "beneficiary", "iban", "account", "account_number",
 })
 
 

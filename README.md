@@ -8,7 +8,8 @@ before it reaches a tool-using AI agent.**
 An AI agent that reads email, browses the web and calls tools will, sooner or
 later, read something written to hijack it — an email, a web page, a document
 crafted to make it exfiltrate data or take an action it was never asked to.
-Airlock sits between the agent and its tools as an **MCP gateway**: every tool
+Airlock sits between the agent and its tools as an **MCP-shaped gateway** (not yet
+the real MCP wire protocol, see below): every tool
 call the agent makes and every piece of content that comes back passes through a
 sealed inspection step. Anything that looks like an injection or an unauthorized
 data egress is **quarantined** — the agent gets a neutral placeholder and carries
@@ -29,7 +30,8 @@ on, uncontaminated.
 
 - **Deterministic rules** — the core, standard-library only, and *authoritative*:
   instruction override, exfiltration instructions, external-recipient sends,
-  high-volume PII egress, system/tool-role spoofing. A `BLOCK` here is final.
+  high-volume PII egress. A `BLOCK` here is final. System/tool-role spoofing is
+  flagged, not blocked on its own.
 - **Local-LLM classifier (optional)** — a second opinion from a model running on
   your own machine via [Ollama](https://ollama.com), to catch subtly phrased
   injections that evade the signatures. **No API, no cost.** It can only *add*
@@ -37,7 +39,9 @@ on, uncontaminated.
 - **Quarantine** — blocked inbound content never reaches the agent; it receives a
   neutral placeholder and continues safely.
 - **Audit trail** — every decision is recorded with its rule and reason, chained
-  so the log is tamper-evident, and streamed live to the console.
+  so editing one entry is detectable. The log lives in memory and is unsigned: it
+  does not stop someone from truncating or rewriting all of it. Events reach the
+  console over SSE; the demo replays precomputed runs.
 
 ## Run the demo
 
@@ -49,7 +53,7 @@ uv run python -m airlock.server --classifier   # also ask a local Ollama model
 The console needs nothing but the standard library and a browser. Pick a
 scenario (or press `1`, `2`, `3`): it runs **twice on fresh mock tools**, first
 with the agent calling its tools directly — the *Without Airlock* panel shows
-what actually left — then through Airlock, streamed live, decision by decision.
+what actually left — then through Airlock, replayed decision by decision.
 
 | # | Scenario | Attack | Stopped by |
 |---|----------|--------|------------|
@@ -89,10 +93,21 @@ thin adapter, kept as the `mcp` optional extra. The core has **no runtime
 dependencies** — engine, gateway, audit, console server and the Ollama client
 are all standard library.
 
+## How it was built
+
+Built with the help of Claude Code (Anthropic): code, tests and write-up, reviewed by the author.
+
 ## Known limitations
 
-Airlock fails closed, so these bias toward over-blocking, never toward letting an
-attack through:
+The recipient check fails closed on the destinations it recognises. Airlock is not
+a complete defence:
+
+- Only email addresses and payment fields are checked as destinations. A URL or
+  webhook is not: a `read_web` call to an attacker's URL with data in the query
+  string, or a message sent to a webhook, is not blocked.
+- False positives are real. A customer email saying "could you send me a copy of
+  my receipt?" trips the exfiltration signature, and one blocked email quarantines
+  the whole inbox result, so triage stops for that batch.
 
 - Homoglyph defence folds a curated set of common Cyrillic/Greek look-alikes, not
   a full [UTS&nbsp;#39](https://www.unicode.org/reports/tr39/) confusables skeleton.
